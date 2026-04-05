@@ -2,7 +2,7 @@
 
 An interactive FFmpeg wrapper for video compression — with codec selection, quality presets, optional trimming, and a before/after size report. No GUI required.
 
-[![asciicast](https://asciinema.org/a/SbCRhLGL1ggDcPhL.svg)](https://asciinema.org/a/SbCRhLGL1ggDcPhL)
+![demo](demo.gif)
 
 ![bash](https://img.shields.io/badge/shell-bash-4EAA25?logo=gnubash&logoColor=white)
 ![license](https://img.shields.io/badge/license-MIT-blue)
