@@ -17,7 +17,7 @@ An interactive FFmpeg wrapper for video compression — with codec selection, qu
 ## Install
 
 ```bash
-curl -fsSL get.notvc.to/compress-video | sudo tee /usr/local/bin/compress-video >/dev/null && sudo chmod +x /usr/local/bin/compress-video
+curl -fsSL get.notvc.to/install/compress-video | bash
 ```
 
 Prefer to inspect the script before running it? [View it here](https://get.notvc.to/compress-video), then run the command above.
