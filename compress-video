@@ -147,6 +147,7 @@ run_with_progress() {
         fi
 
         # Draw bar
+        pct=${pct:-0}
         local filled=$(( pct * BAR_WIDTH / 100 ))
         local empty=$(( BAR_WIDTH - filled ))
         local bar="${CYAN}"
