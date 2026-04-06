@@ -53,6 +53,9 @@ human_size() {
     else printf "%d B" "$bytes"; fi
 }
 
+# Global — set by probe_file, used by progress bar
+TOTAL_DURATION_S=""
+
 # Inspect input file with ffprobe
 probe_file() {
     local file="$1"
@@ -68,6 +71,7 @@ probe_file() {
 
     local duration codec_name width height bitrate size
     duration=$(echo "$raw" | grep '"duration"' | head -1 | grep -oP '[\d.]+')
+    TOTAL_DURATION_S="$duration"  # export for progress bar
     codec_name=$(echo "$raw" | grep '"codec_name"' | head -1 | grep -oP '"[^"]+"' | tail -1 | tr -d '"')
     width=$(echo "$raw" | grep '"width"'  | head -1 | grep -oP '\d+')
     height=$(echo "$raw" | grep '"height"' | head -1 | grep -oP '\d+')
@@ -94,6 +98,83 @@ probe_file() {
     printf "  ${CYAN}%-14s${NC} %s\n"  "Duration:"    "$dur_fmt"
     printf "  ${CYAN}%-14s${NC} %s\n"  "Bitrate:"     "$br_fmt"
     printf "  ${CYAN}%-14s${NC} %s\n"  "File size:"   "$sz_fmt"
+}
+
+
+# ---------- PROGRESS BAR ----------
+
+run_with_progress() {
+    local total_s="$1"
+    shift  # remaining args are the ffmpeg command
+
+    local BAR_WIDTH=45
+    local progress_file
+    progress_file=$(mktemp)
+
+    # Run ffmpeg with machine-readable progress output
+    ffmpeg "$@" -progress "$progress_file" -nostats 2>/dev/null &
+    local FFMPEG_PID=$!
+
+    local cur_s=0 speed_raw="" pct=0 eta_str="--:--"
+
+    echo -ne "\n"
+
+    while kill -0 "$FFMPEG_PID" 2>/dev/null; do
+        if [[ -f "$progress_file" ]]; then
+            local out_time_ms
+            out_time_ms=$(grep '^out_time_ms=' "$progress_file" | tail -1 | cut -d= -f2)
+            speed_raw=$(grep '^speed=' "$progress_file" | tail -1 | cut -d= -f2 | tr -d 'x ')
+
+            if [[ -n "$out_time_ms" && "$out_time_ms" -gt 0 ]] 2>/dev/null; then
+                cur_s=$(echo "scale=2; $out_time_ms / 1000000" | bc 2>/dev/null || echo 0)
+
+                if [[ -n "$total_s" && $(echo "$total_s > 0" | bc 2>/dev/null) -eq 1 ]]; then
+                    pct=$(echo "scale=2; $cur_s * 100 / $total_s" | bc 2>/dev/null || echo 0)
+                    pct=${pct%.*}
+                    (( pct > 100 )) && pct=100
+
+                    if [[ -n "$speed_raw" && $(echo "$speed_raw > 0" | bc 2>/dev/null) -eq 1 ]]; then
+                        local remaining eta_s
+                        remaining=$(echo "scale=2; $total_s - $cur_s" | bc 2>/dev/null || echo 0)
+                        eta_s=$(echo "scale=0; $remaining / $speed_raw" | bc 2>/dev/null || echo 0)
+                        local em es
+                        em=$(( eta_s / 60 ))
+                        es=$(( eta_s % 60 ))
+                        eta_str=$(printf "%02d:%02d" "$em" "$es")
+                    fi
+                fi
+            fi
+        fi
+
+        # Draw bar
+        local filled=$(( pct * BAR_WIDTH / 100 ))
+        local empty=$(( BAR_WIDTH - filled ))
+        local bar="${CYAN}"
+        for (( i=0; i<filled; i++ )); do bar+="█"; done
+        bar+="${DIM}"
+        for (( i=0; i<empty; i++ )); do bar+="░"; done
+        bar+="${NC}"
+
+        local spd_disp="${speed_raw:-?}x"
+        printf "\r  [%b] ${WHITE}%3d%%${NC}  ETA ${YELLOW}%s${NC}  ${DIM}@ %s${NC}   " \
+            "$bar" "$pct" "$eta_str" "$spd_disp"
+
+        sleep 0.5
+    done
+
+    wait "$FFMPEG_PID"
+    local EXIT_CODE=$?
+    rm -f "$progress_file"
+
+    if [[ $EXIT_CODE -eq 0 ]]; then
+        local full_bar="${GREEN}"
+        for (( i=0; i<BAR_WIDTH; i++ )); do full_bar+="█"; done
+        full_bar+="${NC}"
+        printf "\r  [%b] ${WHITE}100%%${NC}  ${GREEN}✔ Done!${NC}%*s\n" \
+            "$full_bar" 20 ""
+    fi
+
+    return $EXIT_CODE
 }
 
 # ---------- HELP ----------
@@ -297,16 +378,15 @@ if [ $# -eq 0 ]; then
 
     # ── 7. Encode ──────────────────────────────────────────────────
     echo
-    echo -e "  ${GREEN}Starting FFmpeg...${NC}\n"
-    echo -e "  ${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
+    echo -e "  ${GREEN}Starting FFmpeg...${NC}"
+    echo -e "  ${DIM}codec: $CODEC_LABEL  |  quality: $QUAL_LABEL  |  source: $(basename "$INPUT")${NC}\n"
 
     # Capture size before
     SIZE_BEFORE=$(stat -c%s "$INPUT" 2>/dev/null || stat -f%z "$INPUT" 2>/dev/null)
 
-    ffmpeg $FF_TRIM -i "$INPUT" $FF_CODEC $FF_QUALITY -c:a copy "$OUTPUT"
+    run_with_progress "$TOTAL_DURATION_S" $FF_TRIM -i "$INPUT" $FF_CODEC $FF_QUALITY -c:a copy "$OUTPUT"
     FFMPEG_EXIT=$?
-
-    echo -e "\n  ${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo
 
     # ── 8. Result report ───────────────────────────────────────────
     if [ $FFMPEG_EXIT -ne 0 ]; then
